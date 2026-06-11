@@ -1,0 +1,16 @@
+{
+  "domainId": "meteor",
+  "taskTemplateId": "geofencing",
+  "autoStart": true,
+  "data": {
+    "vessel": {
+      "id": "9643881",
+      "name": "Harvest Time"
+    },
+    "position": "21.88, -111.54",
+    "severity": "critical"
+  },
+  "priority": "medium",
+  "labels": [],
+  "systemTags": []
+}
