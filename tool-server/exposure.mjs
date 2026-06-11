@@ -71,7 +71,7 @@ const parseFireballs = (resp) => {
 // Most-severe zone a vessel falls within across all detections.
 // Returns null when out of range, else { criticality, nearestEventId, distanceKm }.
 const assessVessel = (vessel, fireballs) => {
-  let best = null; // { rank, level, eventId, distanceKm }
+  let best = null; // { rank, level, eventId, distanceKm, eventLat, eventLon, zoneRadiusKm }
   for (const f of fireballs) {
     const dist = haversineKm(vessel.latitude, vessel.longitude, f.lat, f.lon);
     const outer = outerRangeKm(f.impactE);
@@ -80,14 +80,67 @@ const assessVessel = (vessel, fireballs) => {
       if (dist <= outer * ZONE_FRAC[level]) {
         // pick more-severe rank; tie-break on nearer distance
         if (!best || rank < best.rank || (rank === best.rank && dist < best.distanceKm)) {
-          best = { rank, level, eventId: f.id, distanceKm: dist };
+          best = {
+            rank,
+            level,
+            eventId: f.id,
+            distanceKm: dist,
+            eventLat: f.lat,
+            eventLon: f.lon,
+            zoneRadiusKm: outer * ZONE_FRAC[level], // radius of the zone the vessel sits inside
+          };
         }
         break; // most-severe zone for this fireball found
       }
     }
   }
   if (!best) return null;
-  return { criticality: best.level, nearestEventId: best.eventId, distanceKm: best.distanceKm };
+  return {
+    criticality: best.level,
+    nearestEventId: best.eventId,
+    distanceKm: best.distanceKm,
+    eventLat: best.eventLat,
+    eventLon: best.eventLon,
+    zoneRadiusKm: best.zoneRadiusKm,
+  };
+};
+
+// Margin (km) added beyond the hazard-zone boundary when placing a detour
+// waypoint, so the routed leg stays clearly outside the zone.
+const WAYPOINT_MARGIN_KM = 25;
+const KM_PER_DEG_LAT = 111.32;
+const round4 = (n) => Math.round(n * 1e4) / 1e4;
+
+// Compute a single via-point that pulls a route clear of a circular hazard zone
+// centred on (fLat,fLon). Works in a local equirectangular frame with the
+// fireball at the origin: project the fireball onto the origin→destination line,
+// then push a waypoint radially outward to `clearKm`, away from the fireball. The
+// returned point is exactly `clearKm` from the fireball, i.e. outside the zone.
+const computeSafeWaypoint = (oLat, oLon, dLat, dLon, fLat, fLon, clearKm) => {
+  const kmPerDegLon = KM_PER_DEG_LAT * Math.cos((fLat * Math.PI) / 180);
+  const toXY = (lat, lon) => [(lon - fLon) * kmPerDegLon, (lat - fLat) * KM_PER_DEG_LAT];
+  const O = toXY(oLat, oLon);
+  const D = toXY(dLat, dLon);
+  const AB = [D[0] - O[0], D[1] - O[1]];
+  const ab2 = AB[0] ** 2 + AB[1] ** 2 || 1e-9;
+  // Parameter of the point on segment O→D closest to the fireball (origin).
+  let t = (-O[0] * AB[0] + -O[1] * AB[1]) / ab2;
+  t = Math.max(0, Math.min(1, t));
+  const P = [O[0] + t * AB[0], O[1] + t * AB[1]];
+  const pLen = Math.hypot(P[0], P[1]);
+  let u;
+  if (pLen > 1e-6) {
+    u = [P[0] / pLen, P[1] / pLen]; // push outward along fireball→path direction
+  } else {
+    const al = Math.hypot(AB[0], AB[1]) || 1; // path passes through fireball → go perpendicular
+    u = [-AB[1] / al, AB[0] / al];
+  }
+  const wx = u[0] * clearKm;
+  const wy = u[1] * clearKm;
+  return {
+    latitude: round4(fLat + wy / KM_PER_DEG_LAT),
+    longitude: round4(fLon + wx / kmPerDegLon),
+  };
 };
 
 export const assessExposure = (fireballsResponse, vessels) => {
@@ -96,7 +149,7 @@ export const assessExposure = (fireballsResponse, vessels) => {
   for (const v of vessels ?? []) {
     const hit = assessVessel(v, fireballs);
     if (hit) {
-      affectedVessels.push({
+      const entry = {
         id: v.id,
         name: v.name,
         latitude: v.latitude,
@@ -104,7 +157,22 @@ export const assessExposure = (fireballsResponse, vessels) => {
         criticality: hit.criticality,
         nearestEventId: hit.nearestEventId,
         distanceKm: Math.round(hit.distanceKm * 10) / 10,
-      });
+      };
+      // Detour waypoint clear of the hazard zone, for the routing engine's
+      // viaPoints. Requires a destination to know which way the vessel is headed.
+      const dest = v.destination;
+      if (dest && Number.isFinite(dest.latitude) && Number.isFinite(dest.longitude)) {
+        entry.safeWaypoint = computeSafeWaypoint(
+          v.latitude,
+          v.longitude,
+          dest.latitude,
+          dest.longitude,
+          hit.eventLat,
+          hit.eventLon,
+          hit.zoneRadiusKm + WAYPOINT_MARGIN_KM,
+        );
+      }
+      affectedVessels.push(entry);
     }
   }
 

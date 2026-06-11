@@ -205,7 +205,16 @@
           "longitude": { "type": "number", "description": "Vessel longitude (decimal degrees)." },
           "criticality": { "type": "string", "enum": ["critical", "high", "medium", "low"], "description": "Severity of the most-severe zone the vessel falls within." },
           "nearestEventId": { "type": "string", "description": "Identifier (date) of the fireball driving this vessel's criticality." },
-          "distanceKm": { "type": "number", "description": "Distance from the vessel to that fireball (km)." }
+          "distanceKm": { "type": "number", "description": "Distance from the vessel to that fireball (km)." },
+          "safeWaypoint": {
+            "type": "object",
+            "description": "A detour waypoint positioned just outside the hazard zone, on the side away from the fireball. Pass this as a viaPoint to voyage_generate_route so the new route steers clear of the zone. Absent when the vessel has no destination.",
+            "properties": {
+              "latitude": { "type": "number", "description": "Waypoint latitude (decimal degrees)." },
+              "longitude": { "type": "number", "description": "Waypoint longitude (decimal degrees)." }
+            },
+            "required": ["latitude", "longitude"]
+          }
         },
         "required": ["id", "name", "latitude", "longitude", "criticality", "nearestEventId", "distanceKm"]
       },

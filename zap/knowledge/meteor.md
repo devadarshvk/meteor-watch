@@ -20,9 +20,11 @@ protect vessels that fall within an event's hazard range.
   map or to assess which assets are exposed to an event.
 - **meteor_assess_exposure** — given the `meteor_get_fireballs` response and the
   `meteor_list_vessels` output, returns `affectedVessels` (each tagged with
-  `criticality`), `affectedAssetCount`, `threatScore`, `worstEventId`, and
-  `estimatedRiskReductionPercent`. Use it to decide whether vessels are at risk
-  and to populate the response-approval alert.
+  `criticality` and a `safeWaypoint` detour clear of the hazard zone),
+  `affectedAssetCount`, `threatScore`, `worstEventId`, and
+  `estimatedRiskReductionPercent`. Use it to decide whether vessels are at risk,
+  to populate the response-approval alert, and to feed `safeWaypoint` into the
+  reroute as a viaPoint.
 - **meteor_submit_response_decision** — requests operator approval for a
   recommended response to an event. Gated by an approval widget; the operator
   approves, rejects, or requests more analysis.
@@ -62,8 +64,12 @@ When asked to watch for threats and protect the fleet, run these steps in order:
    vessel's current position as origin and its `destination` as destination,
    fetching whatever inputs that tool needs via the other `voyage_*` tools
    (weather, bunker prices, market rates, safety parameters, AIS trail, etc.) per
-   the voyage domain's own guidance. Render **route_comparison** showing the
-   existing route versus the new route.
+   the voyage domain's own guidance. **Crucially, pass the affected vessel's
+   `safeWaypoint` (from the exposure result) as an entry in the itinerary's
+   `viaPoints` so the route is forced to steer clear of the hazard zone** — this
+   is what makes the reroute actually avoid the meteor range rather than just
+   re-optimise for weather. Render **route_comparison** showing the existing route
+   versus the new (avoidance) route.
 5. **Second approval (activation).** Call `meteor_submit_response_decision` again
    (it renders the `meteor_response_approval` widget) to confirm activating the
    reroute. Wait for the decision.
