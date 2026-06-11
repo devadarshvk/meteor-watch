@@ -1,0 +1,161 @@
+import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { assessExposure } from "./exposure.mjs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PORT = process.env.PORT ? Number(process.env.PORT) : 9001;
+const NASA_FIREBALL_API =
+  process.env.NASA_FIREBALL_API || "https://ssd-api.jpl.nasa.gov/fireball.api";
+
+const openapi = readFileSync(join(__dirname, "openapi.json"), "utf8");
+
+// Hero demo vessel: a REAL stage vessel with an active voyage leg, so the
+// voyage_* routing tools have backend data to reroute it. Position + destination
+// confirmed live from the platform. The DEMO_FIREBALL below is positioned ~25 km
+// away so meteor_assess_exposure flags this vessel as critical.
+const FLEET = [
+  {
+    id: "9643881",
+    name: "Harvest Time",
+    latitude: 21.88,
+    longitude: -111.54,
+    destination: { name: "Rotterdam", latitude: 51.99, longitude: 4.05 },
+  },
+];
+
+// Original synthetic fleet — kept for reference / multi-vessel demos.
+// const FLEET = [
+//   { id: "IMO-9123456", name: "Anna Maria", latitude: 42.1, longitude: -70.4, destination: { name: "Rotterdam", latitude: 51.95, longitude: 4.14 } },
+//   { id: "IMO-9234567", name: "Northern Star", latitude: 31.2, longitude: 131.4, destination: { name: "Yokohama", latitude: 35.45, longitude: 139.66 } },
+//   { id: "538001234", name: "Atlas Polaris", latitude: 56.85, longitude: 172.8, destination: { name: "Dutch Harbor", latitude: 53.89, longitude: -166.54 } },
+//   { id: "538889911", name: "Aurora Drift", latitude: 56.9, longitude: 174.0, destination: { name: "Busan", latitude: 35.1, longitude: 129.04 } },
+//   { id: "IMO-9345678", name: "Pacific Envoy", latitude: 38.0, longitude: -64.5, destination: { name: "New York", latitude: 40.7, longitude: -74.0 } },
+//   { id: "IMO-9456789", name: "Cape Meridian", latitude: -45.4, longitude: -110.2, destination: { name: "Valparaiso", latitude: -33.04, longitude: -71.62 } },
+//   { id: "IMO-9567890", name: "Baltic Crown", latitude: 46.5, longitude: 133.2, destination: { name: "Vladivostok", latitude: 43.12, longitude: 131.89 } },
+//   { id: "IMO-9678901", name: "Coral Sentinel", latitude: -38.0, longitude: -64.7, destination: { name: "Buenos Aires", latitude: -34.6, longitude: -58.37 } },
+// ];
+
+// Synthetic fireball ~25 km north of Harvest Time (21.88, -111.54), high impact
+// energy so the vessel lands inside the critical hazard zone. Injected into the
+// meteor_get_fireballs response by field name so it aligns with NASA's column
+// order regardless of how the live API orders `fields`.
+const DEMO_FIREBALL = {
+  date: "2026-06-11 12:00:00",
+  energy: "500",
+  "impact-e": "50",
+  lat: "22.10",
+  "lat-dir": "N",
+  lon: "111.54",
+  "lon-dir": "W",
+  alt: "30",
+  vel: "18",
+};
+
+function sendJson(res, status, body) {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(payload),
+  });
+  res.end(payload);
+}
+
+async function getFireballs(query) {
+  const params = new URLSearchParams();
+  params.set("req-loc", "true");
+  params.set("sort", "-date");
+  if (query.get("date_min")) params.set("date-min", query.get("date_min"));
+  if (query.get("date_max")) params.set("date-max", query.get("date_max"));
+  if (query.get("energy_min")) params.set("energy-min", query.get("energy_min"));
+  params.set("limit", query.get("limit") || "50");
+
+  const resp = await fetch(`${NASA_FIREBALL_API}?${params.toString()}`);
+  if (!resp.ok) {
+    throw new Error(`NASA Fireball API returned ${resp.status}`);
+  }
+  const data = await resp.json();
+  return injectDemoFireball(data);
+}
+
+// Prepend the demo fireball, mapping its values onto the live `fields` order so
+// the synthetic row aligns with real NASA rows. Newest-first, so it leads.
+function injectDemoFireball(data) {
+  const fields = data.fields ?? [];
+  const row = fields.map((f) => DEMO_FIREBALL[f] ?? null);
+  data.data = [row, ...(data.data ?? [])];
+  if (data.count !== undefined) {
+    data.count = String(Number(data.count) + 1);
+  }
+  return data;
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      if (!raw) return resolve({});
+      try {
+        resolve(JSON.parse(raw));
+      } catch (e) {
+        reject(e);
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+const server = createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, `http://localhost:${PORT}`);
+    const path = url.pathname;
+
+    if (req.method === "GET" && path === "/openapi.json") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(openapi);
+    }
+
+    if (req.method === "GET" && path === "/fireballs") {
+      const data = await getFireballs(url.searchParams);
+      return sendJson(res, 200, data);
+    }
+
+    if (req.method === "GET" && path === "/vessels") {
+      return sendJson(res, 200, { vessels: FLEET });
+    }
+
+    if (req.method === "POST" && path === "/response/decision") {
+      const body = await readBody(req);
+      if (!body.decision) {
+        return sendJson(res, 400, { error: "Missing required field 'decision'." });
+      }
+      return sendJson(res, 200, {
+        eventId: body.eventId ?? null,
+        decision: body.decision,
+        recordedAt: new Date().toISOString(),
+      });
+    }
+
+    if (req.method === "POST" && path === "/exposure") {
+      const body = await readBody(req);
+      if (!body.fireballs || !Array.isArray(body.vessels)) {
+        return sendJson(res, 400, {
+          error: "Body must include 'fireballs' (get_fireballs response) and 'vessels' (array).",
+        });
+      }
+      return sendJson(res, 200, assessExposure(body.fireballs, body.vessels));
+    }
+
+    return sendJson(res, 404, { error: `No route for ${req.method} ${path}` });
+  } catch (err) {
+    return sendJson(res, 500, { error: err?.message ?? "Internal error" });
+  }
+});
+
+server.listen(PORT, () => {
+  console.log(`Meteor tool server listening on http://localhost:${PORT}`);
+  console.log(`OpenAPI spec at http://localhost:${PORT}/openapi.json`);
+});

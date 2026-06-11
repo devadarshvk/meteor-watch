@@ -1,0 +1,250 @@
+{
+  "openapi": "3.0.0",
+  "x-zap": { "enabled": true },
+  "info": {
+    "title": "Meteor Debris Watch API",
+    "version": "1.0.0",
+    "description": "Fireball / bolide detections and maritime exposure assessment for the meteor domain."
+  },
+  "servers": [{ "url": "http://localhost:9001" }],
+  "paths": {
+    "/fireballs": {
+      "get": {
+        "operationId": "get_fireballs",
+        "summary": "Get fireball detections",
+        "description": "Fetch atmospheric fireball / bolide detections from the NASA/JPL Fireball Data API. Returns located events only, newest first, as `signature`, `count`, `fields`, and `data` (each row's values align to `fields`: date, energy, impact-e, lat, lat-dir, lon, lon-dir, alt, vel). Use whenever the user asks about recent fireballs, bolides, meteor detections, or atmospheric impact events. The response feeds the fireball map, list, and detail widgets directly.",
+        "parameters": [
+          {
+            "name": "date_min",
+            "in": "query",
+            "required": false,
+            "description": "Earliest detection date, inclusive (YYYY-MM-DD, e.g. '2024-01-01').",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "date_max",
+            "in": "query",
+            "required": false,
+            "description": "Latest detection date, inclusive (YYYY-MM-DD).",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "energy_min",
+            "in": "query",
+            "required": false,
+            "description": "Minimum total radiated energy in 10^10 joules (string number, e.g. '5').",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of detections to return (default '50').",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fireball detections in NASA/JPL Fireball Data API format.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FireballResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/vessels": {
+      "get": {
+        "operationId": "list_vessels",
+        "summary": "List watched vessels",
+        "description": "Return the watched maritime fleet, each vessel with `id`, `name`, `latitude`, and `longitude`. Use to overlay vessels on a fireball map or to assess which assets fall within an event's hazard range zones.",
+        "responses": {
+          "200": {
+            "description": "The watched fleet.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/VesselListResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/exposure": {
+      "post": {
+        "operationId": "assess_exposure",
+        "summary": "Assess vessel exposure",
+        "description": "Given a fireball detection set (the get_fireballs response) and a list of vessels (the list_vessels output), return which vessels fall inside a detection's hazard range zones, each tagged with its criticality (critical/high/medium/low), plus an overall threatScore, affectedAssetCount, and estimatedRiskReductionPercent. Use after fetching fireballs and vessels to decide whether to alert the operator and to populate the response-approval widget.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ExposureRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Vessel exposure assessment.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ExposureResult" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/response/decision": {
+      "post": {
+        "operationId": "submit_response_decision",
+        "summary": "Submit response decision",
+        "x-zap-approval-widget": "meteor_response_approval",
+        "description": "Request operator approval for a recommended response to a meteor / debris event. The operator reviews the situation and either approves, rejects, or requests more analysis. Call this as the final step once you have a recommended set of actions for a threatened event.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ResponseDecision" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The recorded operator decision.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ResponseDecisionResult" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "FireballSignature": {
+        "type": "object",
+        "properties": {
+          "version": { "type": "string", "description": "API version." },
+          "source": { "type": "string", "description": "Data source, e.g. 'NASA/JPL Fireball Data API'." }
+        }
+      },
+      "FireballResponse": {
+        "type": "object",
+        "properties": {
+          "signature": { "$ref": "#/components/schemas/FireballSignature", "description": "Source metadata." },
+          "count": { "type": "string", "description": "Number of records returned, as a string." },
+          "fields": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Column names aligned to each data row: date, energy, impact-e, lat, lat-dir, lon, lon-dir, alt, vel."
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": { "type": "string", "nullable": true }
+            },
+            "description": "Rows of fireball detections; each value aligns to `fields`. Cells may be null (e.g. missing velocity)."
+          }
+        },
+        "required": ["fields", "data"]
+      },
+      "Vessel": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Vessel identifier (IMO or MMSI)." },
+          "name": { "type": "string", "description": "Vessel name." },
+          "latitude": { "type": "number", "description": "Vessel latitude (decimal degrees, +N/-S)." },
+          "longitude": { "type": "number", "description": "Vessel longitude (decimal degrees, +E/-W)." },
+          "destination": {
+            "type": "object",
+            "description": "The vessel's current voyage destination, used to compute a reroute.",
+            "properties": {
+              "name": { "type": "string", "description": "Destination port name." },
+              "latitude": { "type": "number", "description": "Destination latitude (decimal degrees)." },
+              "longitude": { "type": "number", "description": "Destination longitude (decimal degrees)." }
+            }
+          }
+        },
+        "required": ["id", "name", "latitude", "longitude"]
+      },
+      "VesselListResponse": {
+        "type": "object",
+        "properties": {
+          "vessels": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Vessel" },
+            "description": "The watched fleet."
+          }
+        },
+        "required": ["vessels"]
+      },
+      "ExposureRequest": {
+        "type": "object",
+        "properties": {
+          "fireballs": { "$ref": "#/components/schemas/FireballResponse", "description": "The get_fireballs response to assess." },
+          "vessels": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Vessel" },
+            "description": "Vessels to test against the fireball hazard zones."
+          }
+        },
+        "required": ["fireballs", "vessels"]
+      },
+      "AffectedVessel": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Vessel identifier." },
+          "name": { "type": "string", "description": "Vessel name." },
+          "latitude": { "type": "number", "description": "Vessel latitude (decimal degrees)." },
+          "longitude": { "type": "number", "description": "Vessel longitude (decimal degrees)." },
+          "criticality": { "type": "string", "enum": ["critical", "high", "medium", "low"], "description": "Severity of the most-severe zone the vessel falls within." },
+          "nearestEventId": { "type": "string", "description": "Identifier (date) of the fireball driving this vessel's criticality." },
+          "distanceKm": { "type": "number", "description": "Distance from the vessel to that fireball (km)." }
+        },
+        "required": ["id", "name", "latitude", "longitude", "criticality", "nearestEventId", "distanceKm"]
+      },
+      "ExposureResult": {
+        "type": "object",
+        "properties": {
+          "affectedVessels": { "type": "array", "items": { "$ref": "#/components/schemas/AffectedVessel" }, "description": "Vessels inside at least one hazard zone." },
+          "affectedAssetCount": { "type": "integer", "description": "Number of affected vessels." },
+          "threatScore": { "type": "number", "description": "Composite threat score (0–100, higher = worse)." },
+          "estimatedRiskReductionPercent": { "type": "number", "description": "Estimated risk reduction if recommended actions are taken (0–100)." },
+          "worstEventId": { "type": "string", "nullable": true, "description": "Identifier of the fireball driving the worst exposure, or null if none." },
+          "summary": { "type": "string", "description": "One-line human summary of the exposure." }
+        },
+        "required": ["affectedVessels", "affectedAssetCount", "threatScore", "estimatedRiskReductionPercent", "summary"]
+      },
+      "ResponseDecision": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": ["approved", "rejected", "more_analysis_requested"],
+            "description": "The operator's decision on the recommended response."
+          },
+          "eventId": {
+            "type": "string",
+            "description": "Identifier of the event the decision relates to."
+          }
+        },
+        "required": ["decision"]
+      },
+      "ResponseDecisionResult": {
+        "type": "object",
+        "properties": {
+          "eventId": { "type": "string", "description": "Identifier of the event the decision relates to." },
+          "decision": { "type": "string", "description": "The recorded decision." },
+          "recordedAt": { "type": "string", "description": "ISO timestamp the decision was recorded." }
+        },
+        "required": ["decision", "recordedAt"]
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+id: meteor
+name: Meteor Debris Watch
+summary: >
+  Monitors atmospheric fireball / bolide detections from the NASA/JPL Fireball
+  Data API, assesses which maritime assets fall within an event's hazard range
+  zones, and gates recommended responses through operator approval.
