@@ -34,9 +34,15 @@ runs it from a single prompt such as:
 ```
 meteor_watch/
 ├── zap.config.mjs              # CLI config: stage env, local meteor domain, widgets path
+├── scripts/
+│   ├── create-task-and-turn.sh # create a v2 task + first turn via the API
+│   ├── create-task.json        # default task body (meteor domain, hero vessel)
+│   └── create-turn.json        # default turn message
 ├── zap/
 │   ├── domain.yaml             # domain id: meteor
 │   ├── knowledge/meteor.md     # ambient knowledge (tools + staged flow)
+│   ├── tasks/
+│   │   └── geofencing.md       # task template (id: geofencing; {{vessel}}, {{position}}, {{severity}})
 │   └── evals/                  # hello.eval.ts (sample)
 └── tool-server/                # zero-dep node:http tool server
     ├── server.mjs              # /fireballs, /vessels, /exposure, /response/decision
@@ -115,6 +121,82 @@ UI: `http://localhost:3000/zap`.
 > restart `zap serve` after editing `openapi.json` or `zap/knowledge/meteor.md`.
 > Tool-server data changes (fleet, fireball) take effect on the next tool call, no
 > `zap serve` restart needed.
+
+## Creating a task via the API
+
+With `zap serve` running, you can create a v2 task and post the first turn from
+the shell instead of driving the UI manually. The script in `scripts/` calls
+`POST /zap/api/v2/tasks/` then `POST /zap/api/v2/tasks/{id}/turns`.
+
+**Prerequisites**
+
+- `zap serve` (and the tool server) running as above.
+- `ZAP_TOKEN` — an Auth0 bearer JWT for the stage environment (same token the UI
+  uses). Export it before running the script.
+
+**Run with defaults**
+
+The defaults target the demo hero vessel (`Harvest Time`, IMO 9643881) and a
+turn message that kicks off the fireball exposure flow:
+
+```bash
+export ZAP_TOKEN="eyJ..."          # your stage Auth0 JWT
+./scripts/create-task-and-turn.sh
+```
+
+This reads `scripts/create-task.json` and `scripts/create-turn.json`. On
+success it prints the created task id and the formatted turn response.
+
+**Custom bodies**
+
+Pass JSON file paths as arguments to override the defaults:
+
+```bash
+./scripts/create-task-and-turn.sh ./scripts/create-task.json ./scripts/create-turn.json
+```
+
+Optional environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ZAP_BASE_URL` | `http://localhost:3000` | ZAP API base URL |
+| `ZAP_TOKEN` | (required) | Auth0 bearer JWT |
+
+**Default task body** (`create-task.json`):
+
+```json
+{
+  "domainId": "meteor",
+  "taskTemplateId": "geofencing",
+  "autoStart": true,
+  "data": {
+    "vessel": { "id": "9643881", "name": "Harvest Time" },
+    "position": "21.88, -111.54",
+    "severity": "critical"
+  },
+  "priority": "medium"
+}
+```
+
+`autoStart: true` starts the agent immediately after the task is created. Edit
+`data` to match another vessel or scenario; keep `domainId` as `meteor`.
+
+**Default turn message** (`create-turn.json`):
+
+```json
+{
+  "message": "Check for recent fireball detections and assess vessel exposure."
+}
+```
+
+For the full staged reroute flow (alert → reroute → activate), use a message
+like the prompt in [What it does](#what-it-does-staged-reroute-flow) above.
+
+**Help**
+
+```bash
+./scripts/create-task-and-turn.sh --help
+```
 
 ## Testing
 
