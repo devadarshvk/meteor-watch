@@ -1,6 +1,6 @@
 ---
 title: Geofencing alert for {{vessel.name}}
-description: A fireball threat is detected for show the details and suggest alternative safe route
+description: A fireball threat is detected for the vessel. show the details and suggest alternative safe route
 ---
 
 The voyage for {{vessel.name}} shows a {severity} threat 
