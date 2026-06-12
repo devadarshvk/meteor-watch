@@ -1,0 +1,4 @@
+[submodule "widgets"]
+	path = widgets
+	url = https://github.com/0north/zap-widgets.git
+	branch = feature/weather-service-widget
