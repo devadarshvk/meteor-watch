@@ -1,12 +1,3 @@
-// SMARTShip (bahri.alphaorimarine.com) client.
-//
-// Auth: ZeroNorth api-login (Auth0-backed). POST client_id/client_secret/audience/tenant
-// to ONBOARDING_AUTH_TOKEN_URL, get back an RS256 bearer token, then call the
-// /v1.2/geo-custom-zone endpoints with `Authorization: Bearer <token>`.
-//
-// SMARTShip's geo-custom-zone router (Server/src/router/geo-custom-zone.router.ts):
-//   POST /v1.2/geo-custom-zone/upload  — multipart, field `file`, *.kml -> parsed boundaries
-//   POST /v1.2/geo-custom-zone         — JSON zone create -> { status, data: <zoneId> }
 
 const AUTH_TOKEN_URL = process.env.ONBOARDING_AUTH_TOKEN_URL;
 const SERVER_URL = process.env.SMARTSHIP_SERVER_URL;
@@ -16,7 +7,6 @@ const CLIENT_ID = process.env.SMARTSHIP_CLIENT_ID;
 const CLIENT_SECRET = process.env.SMARTSHIP_CLIENT_SECRET;
 const TENANT = process.env.SMARTSHIP_TENANT || "0north";
 
-// Defaults for zone create (override per-call or via env).
 const DEFAULT_COMPANY_ID = process.env.SMARTSHIP_COMPANY_ID || "";
 const DEFAULT_USER_ID = process.env.SMARTSHIP_USER_ID || "";
 
@@ -33,7 +23,6 @@ function requireEnv() {
   }
 }
 
-// In-memory token cache. Decodes JWT `exp` and refreshes 60s early.
 let _token = null;
 let _tokenExp = 0; // epoch ms
 
@@ -98,8 +87,6 @@ async function authedFetch(url, opts = {}) {
   return resp;
 }
 
-// POST /geo-custom-zone/upload — multipart upload of a .kml file.
-// SMARTShip parses it and returns { boundary: [{coordinates:[[lon,lat],...], name}], zone_color, zone_name }.
 export async function uploadCustomZoneKml(kmlBuffer, filename = "fireballs.kml") {
   if (!filename.endsWith(".kml")) {
     throw new Error("filename must end in .kml (SMARTShip rejects other extensions)");
@@ -116,7 +103,6 @@ export async function uploadCustomZoneKml(kmlBuffer, filename = "fireballs.kml")
   return JSON.parse(text); // { status, data: { boundary, zone_color, zone_name } }
 }
 
-// POST /geo-custom-zone — create a zone. `boundary` items need { boundary_name, coordinates }.
 export async function createCustomZone({
   company_id = DEFAULT_COMPANY_ID,
   user_id = DEFAULT_USER_ID,
@@ -142,8 +128,6 @@ export async function createCustomZone({
   return JSON.parse(text); // { status: 'OK', data: <zoneId> }
 }
 
-// Convenience: upload a KML, then create a zone from its parsed boundaries.
-// Maps the upload's per-placemark `name` -> `boundary_name` (create requires it).
 export async function pushKmlAsCustomZone(kmlBuffer, opts = {}) {
   const uploaded = await uploadCustomZoneKml(kmlBuffer, opts.filename);
   const parsed = uploaded.data || uploaded;

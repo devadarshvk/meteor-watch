@@ -18,10 +18,6 @@ const NASA_FIREBALL_API =
 
 const openapi = readFileSync(join(__dirname, "openapi.json"), "utf8");
 
-// Hero demo vessel: a REAL stage vessel with an active voyage leg, so the
-// voyage_* routing tools have backend data to reroute it. Position + destination
-// confirmed live from the platform. The DEMO_FIREBALL below is positioned ~25 km
-// away so meteor_assess_exposure flags this vessel as critical.
 const FLEET = [
   {
     id: "9643881",
@@ -32,23 +28,6 @@ const FLEET = [
   },
 ];
 
-// Original synthetic fleet — kept for reference / multi-vessel demos.
-// const FLEET = [
-//   { id: "IMO-9123456", name: "Anna Maria", latitude: 42.1, longitude: -70.4, destination: { name: "Rotterdam", latitude: 51.95, longitude: 4.14 } },
-//   { id: "IMO-9234567", name: "Northern Star", latitude: 31.2, longitude: 131.4, destination: { name: "Yokohama", latitude: 35.45, longitude: 139.66 } },
-//   { id: "538001234", name: "Atlas Polaris", latitude: 56.85, longitude: 172.8, destination: { name: "Dutch Harbor", latitude: 53.89, longitude: -166.54 } },
-//   { id: "538889911", name: "Aurora Drift", latitude: 56.9, longitude: 174.0, destination: { name: "Busan", latitude: 35.1, longitude: 129.04 } },
-//   { id: "IMO-9345678", name: "Pacific Envoy", latitude: 38.0, longitude: -64.5, destination: { name: "New York", latitude: 40.7, longitude: -74.0 } },
-//   { id: "IMO-9456789", name: "Cape Meridian", latitude: -45.4, longitude: -110.2, destination: { name: "Valparaiso", latitude: -33.04, longitude: -71.62 } },
-//   { id: "IMO-9567890", name: "Baltic Crown", latitude: 46.5, longitude: 133.2, destination: { name: "Vladivostok", latitude: 43.12, longitude: 131.89 } },
-//   { id: "IMO-9678901", name: "Coral Sentinel", latitude: -38.0, longitude: -64.7, destination: { name: "Buenos Aires", latitude: -34.6, longitude: -58.37 } },
-// ];
-
-// Synthetic high-impact fireball positioned on Harvest Time's voyage, off the
-// Pacific coast of southern Mexico (14°57'31"N, 99°57'10"W). High impact energy so
-// the voyage crosses the critical hazard zone. Injected into the
-// meteor_get_fireballs response by field name so it aligns with NASA's column
-// order regardless of how the live API orders `fields`.
 const DEMO_FIREBALL = {
   date: "2026-06-11 12:00:00",
   energy: "500",
@@ -89,8 +68,6 @@ async function getFireballs(query) {
   return injectDemoFireball(data);
 }
 
-// Prepend the demo fireball, mapping its values onto the live `fields` order so
-// the synthetic row aligns with real NASA rows. Newest-first, so it leads.
 function injectDemoFireball(data) {
   const fields = data.fields ?? [];
   const row = fields.map((f) => DEMO_FIREBALL[f] ?? null);
@@ -183,11 +160,6 @@ const server = createServer(async (req, res) => {
       }
       return sendJson(res, 200, assessExposure(body.fireballs, body.vessels));
     }
-
-    // --- SMARTShip geo-custom-zone integration ---
-
-    // Upload raw KML to SMARTShip; returns parsed boundaries/color/name.
-    // Body = raw KML text. Optional ?filename=foo.kml
     if (req.method === "POST" && path === "/smartship/custom-zone/upload") {
       const buf = await readRaw(req);
       if (!buf.length) return sendJson(res, 400, { error: "Empty body; expected raw KML." });
@@ -196,17 +168,13 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 200, out);
     }
 
-    // Create a custom zone from a JSON payload (passthrough to SMARTShip).
-    // Body = { company_id, user_id, zone_name, zone_color, zone_permission, boundary }.
+
     if (req.method === "POST" && path === "/smartship/custom-zone") {
       const body = await readBody(req);
       const out = await createCustomZone(body);
       return sendJson(res, 200, out);
     }
 
-    // One-shot: generate the current fireball-hazard KML and push it to
-    // SMARTShip as a custom zone. Body (optional) = { company_id, user_id,
-    // zone_name, zone_color }. Reuses the same fireball query params as /kml.
     if (req.method === "POST" && path === "/smartship/push-hazard-zones") {
       const body = await readBody(req);
       const data = await getFireballs(url.searchParams);

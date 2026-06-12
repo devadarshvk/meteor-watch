@@ -123,7 +123,7 @@
       "post": {
         "operationId": "assess_exposure",
         "summary": "Assess vessel exposure",
-        "description": "Given a fireball detection set (the get_fireballs response) and a list of vessels (the list_vessels output), return which vessels' planned voyages are exposed to a detection's hazard range zones. Exposure is judged on the voyage leg from each vessel's current position to its destination: a vessel is flagged when that path crosses a zone, so a ship heading into a zone is caught before it arrives. (A vessel with no destination has no voyage to assess and is skipped.) Each is tagged with its criticality (critical/high/medium/low), plus an overall threatScore, affectedAssetCount, and estimatedRiskReductionPercent. Use after fetching fireballs and vessels to decide whether to alert the operator and to populate the response-approval widget.",
+        "description": "Given a fireball detection set (the get_fireballs response) and a list of vessels (the list_vessels output), return which vessels' planned voyages are exposed to a detection's hazard range zones. Exposure is judged on the voyage PATH: if a vessel includes a `route` (its actual generated voyage polyline) the assessment uses that real path; otherwise it falls back to a straight current-position-to-destination leg. A vessel is flagged when its path crosses a zone, so a ship heading into a zone is caught before it arrives. For an accurate result that matches the route shown on the map, generate the vessel's route first (voyage_generate_route) and pass its waypoints as `route`. (A vessel with neither a route nor a destination is skipped.) Each affected vessel is tagged with its criticality (critical/high/medium/low) and given a `safeWaypoint` detour; the result also carries threatScore, affectedAssetCount, estimatedRiskReductionPercent, and hazardZones.",
         "requestBody": {
           "required": true,
           "content": {
@@ -215,6 +215,18 @@
               "name": { "type": "string", "description": "Destination port name." },
               "latitude": { "type": "number", "description": "Destination latitude (decimal degrees)." },
               "longitude": { "type": "number", "description": "Destination longitude (decimal degrees)." }
+            }
+          },
+          "route": {
+            "type": "array",
+            "description": "Optional planned route polyline (ordered waypoints of the vessel's actual generated voyage, e.g. from voyage_generate_route). When supplied, exposure is assessed against this real path instead of a straight current-position-to-destination line — so the zone is tested against where the vessel will truly sail. Omit it and a straight leg is used.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "latitude": { "type": "number", "description": "Waypoint latitude (decimal degrees)." },
+                "longitude": { "type": "number", "description": "Waypoint longitude (decimal degrees)." }
+              },
+              "required": ["latitude", "longitude"]
             }
           }
         },
