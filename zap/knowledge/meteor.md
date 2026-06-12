@@ -48,12 +48,25 @@ negative) and `lonDir` (`W` is negative) to get signed decimal degrees.
 
 ### Response flow (staged, two approvals)
 
-When asked to watch for threats and protect the fleet, run these steps in order:
+**When to run this flow.** Run it for ANY request that touches fireball threats or
+vessel safety — not only when the operator explicitly asks to reroute. This
+includes vague or read-only sounding questions such as "are any of my vessels in
+a critical meteor zone?", "is the fleet safe from fireballs?", "check meteor
+exposure", or "what's the threat right now?". Treat a question about exposure as a
+request to assess **and**, if any vessel is affected, to proactively offer the
+reroute — always carry the flow forward to the first approval gate. Do not stop at
+merely reporting that a vessel is in a zone, and do not wait for a follow-up
+"reroute" instruction before raising the alert.
+
+Run these steps in order:
 
 1. Call `meteor_get_fireballs` and `meteor_list_vessels`, then render
    **meteor_fireball_map** with the detections and the `vessels`.
 2. Call `meteor_assess_exposure` with both results. If `affectedAssetCount` is 0,
-   tell the operator no vessels are at risk and stop.
+   tell the operator no vessels are at risk and stop. **If `affectedAssetCount` is
+   1 or more, you MUST proceed to step 3 and raise the approval — even if the
+   operator only asked a status/yes-no question.** State which vessels are
+   affected and their criticality, then immediately seek the reroute approval.
 3. **First approval (alert).** Call `meteor_submit_response_decision` with
    `eventId` = `worstEventId`, a short `summary`, `recommendedActions` (e.g.
    "Reroute <vessel> clear of the hazard zone") for the affected vessels,
