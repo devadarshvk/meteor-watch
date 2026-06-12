@@ -123,7 +123,7 @@
       "post": {
         "operationId": "assess_exposure",
         "summary": "Assess vessel exposure",
-        "description": "Given a fireball detection set (the get_fireballs response) and a list of vessels (the list_vessels output), return which vessels fall inside a detection's hazard range zones, each tagged with its criticality (critical/high/medium/low), plus an overall threatScore, affectedAssetCount, and estimatedRiskReductionPercent. Use after fetching fireballs and vessels to decide whether to alert the operator and to populate the response-approval widget.",
+        "description": "Given a fireball detection set (the get_fireballs response) and a list of vessels (the list_vessels output), return which vessels' planned voyages are exposed to a detection's hazard range zones. Exposure is judged on the voyage leg from each vessel's current position to its destination: a vessel is flagged when that path crosses a zone, so a ship heading into a zone is caught before it arrives. (A vessel with no destination has no voyage to assess and is skipped.) Each is tagged with its criticality (critical/high/medium/low), plus an overall threatScore, affectedAssetCount, and estimatedRiskReductionPercent. Use after fetching fireballs and vessels to decide whether to alert the operator and to populate the response-approval widget.",
         "requestBody": {
           "required": true,
           "content": {
@@ -250,9 +250,9 @@
           "name": { "type": "string", "description": "Vessel name." },
           "latitude": { "type": "number", "description": "Vessel latitude (decimal degrees)." },
           "longitude": { "type": "number", "description": "Vessel longitude (decimal degrees)." },
-          "criticality": { "type": "string", "enum": ["critical", "high", "medium", "low"], "description": "Severity of the most-severe zone the vessel falls within." },
+          "criticality": { "type": "string", "enum": ["critical", "high", "medium", "low"], "description": "Severity of the most-severe zone the vessel's voyage enters." },
           "nearestEventId": { "type": "string", "description": "Identifier (date) of the fireball driving this vessel's criticality." },
-          "distanceKm": { "type": "number", "description": "Distance from the vessel to that fireball (km)." },
+          "distanceKm": { "type": "number", "description": "Closest approach (km) of the vessel's voyage path (current position → destination) to that fireball." },
           "safeWaypoint": {
             "type": "object",
             "description": "A detour waypoint positioned just outside the hazard zone, on the side away from the fireball. Pass this as a viaPoint to voyage_generate_route so the new route steers clear of the zone. Absent when the vessel has no destination.",
@@ -273,9 +273,46 @@
           "threatScore": { "type": "number", "description": "Composite threat score (0–100, higher = worse)." },
           "estimatedRiskReductionPercent": { "type": "number", "description": "Estimated risk reduction if recommended actions are taken (0–100)." },
           "worstEventId": { "type": "string", "nullable": true, "description": "Identifier of the fireball driving the worst exposure, or null if none." },
+          "hazardZones": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/HazardZone" },
+            "description": "One GeoJSON nogo-zone polygon per affected fireball event — the critical hazard circles the reroute steers clear of. Pass this array straight through as the route_comparison widget's activePolygons so the avoided zone is drawn on the reroute map."
+          },
           "summary": { "type": "string", "description": "One-line human summary of the exposure." }
         },
         "required": ["affectedVessels", "affectedAssetCount", "threatScore", "estimatedRiskReductionPercent", "summary"]
+      },
+      "HazardZone": {
+        "type": "object",
+        "description": "A meteor hazard zone as a route_comparison-compatible activePolygon (GeoJSON Feature with circular Polygon geometry).",
+        "properties": {
+          "id": { "type": "string", "description": "Zone identifier (e.g. 'meteor-<eventId>')." },
+          "name": { "type": "string", "description": "Human-readable zone name." },
+          "type": { "type": "string", "description": "Zone type; always 'nogo' for meteor hazard zones." },
+          "geojson": {
+            "type": "object",
+            "description": "GeoJSON Feature with a circular Polygon geometry approximating the hazard zone.",
+            "properties": {
+              "type": { "type": "string", "description": "Always 'Feature'." },
+              "geometry": {
+                "type": "object",
+                "description": "GeoJSON Polygon geometry (a closed ring of [longitude, latitude] pairs).",
+                "properties": {
+                  "type": { "type": "string", "description": "Always 'Polygon'." },
+                  "coordinates": {
+                    "type": "array",
+                    "description": "Polygon rings; the first is the outer circle ring of [longitude, latitude] pairs.",
+                    "items": { "type": "array", "items": { "type": "array", "items": { "type": "number" } } }
+                  }
+                }
+              },
+              "properties": { "type": "object", "description": "Zone metadata (eventId, criticality, radiusKm)." }
+            }
+          },
+          "notes": { "type": "string", "description": "Free-text zone notes." },
+          "order": { "type": "integer", "description": "Rendering order." }
+        },
+        "required": ["id", "name", "type", "geojson", "notes", "order"]
       },
       "ResponseDecision": {
         "type": "object",
