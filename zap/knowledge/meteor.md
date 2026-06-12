@@ -82,7 +82,9 @@ Run these steps in order:
    `viaPoints` so the route is forced to steer clear of the hazard zone** — this
    is what makes the reroute actually avoid the meteor range rather than just
    re-optimise for weather. Render **route_comparison** showing the existing route
-   versus the new (avoidance) route.
+   versus the new (avoidance) route. **Pass the `fireballs` field** (the
+   `meteor_get_fireballs` response) so the hazard zones are overlaid on the route
+   map — the operator can see exactly which routes pass through impact zones.
 5. **Second approval (activation).** Call `meteor_submit_response_decision` again
    (it renders the `meteor_response_approval` widget) to confirm activating the
    reroute. Wait for the decision.

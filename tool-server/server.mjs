@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
