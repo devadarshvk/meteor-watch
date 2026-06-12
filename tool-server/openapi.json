@@ -55,6 +55,53 @@
         }
       }
     },
+    "/kml": {
+      "get": {
+        "operationId": "get_fireball_kml",
+        "summary": "Export fireball detections as KML",
+        "description": "Fetch the latest NASA/JPL fireball detections and return them as a KML file with one 100 km circle polygon per event. The response is a downloadable `fireballs.kml` suitable for Google Earth or any GIS tool. Accepts the same date and energy filters as get_fireballs.",
+        "parameters": [
+          {
+            "name": "date_min",
+            "in": "query",
+            "required": false,
+            "description": "Earliest detection date, inclusive (YYYY-MM-DD).",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "date_max",
+            "in": "query",
+            "required": false,
+            "description": "Latest detection date, inclusive (YYYY-MM-DD).",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "energy_min",
+            "in": "query",
+            "required": false,
+            "description": "Minimum total radiated energy in 10^10 joules (e.g. '5').",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of fireball detections to include (default '50').",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "KML document with one polygon per fireball detection.",
+            "content": {
+              "application/vnd.google-earth.kml+xml": {
+                "schema": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/vessels": {
       "get": {
         "operationId": "list_vessels",

@@ -34,3 +34,6 @@ yarn-error.log*
 Thumbs.db
 
 docs/
+
+# Generated KML output
+data/
