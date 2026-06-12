@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { assessExposure } from "./exposure.mjs";
 import { buildKML } from "./kml.mjs";
+import {
+  uploadCustomZoneKml,
+  createCustomZone,
+  pushKmlAsCustomZone,
+} from "./smartship.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT ? Number(process.env.PORT) : 9001;
@@ -111,6 +116,15 @@ function readBody(req) {
   });
 }
 
+function readRaw(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -166,6 +180,37 @@ const server = createServer(async (req, res) => {
         });
       }
       return sendJson(res, 200, assessExposure(body.fireballs, body.vessels));
+    }
+
+    // --- SMARTShip geo-custom-zone integration ---
+
+    // Upload raw KML to SMARTShip; returns parsed boundaries/color/name.
+    // Body = raw KML text. Optional ?filename=foo.kml
+    if (req.method === "POST" && path === "/smartship/custom-zone/upload") {
+      const buf = await readRaw(req);
+      if (!buf.length) return sendJson(res, 400, { error: "Empty body; expected raw KML." });
+      const filename = url.searchParams.get("filename") || "fireballs.kml";
+      const out = await uploadCustomZoneKml(buf, filename);
+      return sendJson(res, 200, out);
+    }
+
+    // Create a custom zone from a JSON payload (passthrough to SMARTShip).
+    // Body = { company_id, user_id, zone_name, zone_color, zone_permission, boundary }.
+    if (req.method === "POST" && path === "/smartship/custom-zone") {
+      const body = await readBody(req);
+      const out = await createCustomZone(body);
+      return sendJson(res, 200, out);
+    }
+
+    // One-shot: generate the current fireball-hazard KML and push it to
+    // SMARTShip as a custom zone. Body (optional) = { company_id, user_id,
+    // zone_name, zone_color }. Reuses the same fireball query params as /kml.
+    if (req.method === "POST" && path === "/smartship/push-hazard-zones") {
+      const body = await readBody(req);
+      const data = await getFireballs(url.searchParams);
+      const kml = Buffer.from(buildKML(data), "utf8");
+      const out = await pushKmlAsCustomZone(kml, body);
+      return sendJson(res, 200, out);
     }
 
     return sendJson(res, 404, { error: `No route for ${req.method} ${path}` });
