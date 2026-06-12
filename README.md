@@ -1,259 +1,291 @@
 # Meteor Debris Watch
 
-A ZAP (ZeroNorth Agentic Platform) demo domain. The agent monitors atmospheric
-fireball / bolide detections from the NASA/JPL Fireball Data API, computes which
-vessels' planned voyages cross an event's debris hazard zones, alerts the operator
-for approval, and — on approval — reroutes the threatened voyage via the real
-`voyage` routing tools, gated by a second approval before activation.
+**Domain:** `meteor` | **Platform:** ZAP (ZeroNorth Agentic Platform) | **Stack:** Node.js · React · OpenAPI · deck.gl
 
-## What it does (staged reroute flow)
+A ZAP domain that connects real NASA/JPL atmospheric fireball data to live maritime
+vessel positions, runs geometric hazard-zone analysis, and drives a two-gate
+human-in-the-loop approval flow that ends in an actual reroute of a real stage vessel —
+all from a single natural-language prompt.
 
-1. **Detect** — `meteor_get_fireballs` + `meteor_list_vessels`, rendered on the
-   `meteor_fireball_map` widget.
-2. **Route** — `voyage_generate_route` computes each vessel's current (original)
-   route first, so exposure can be tested against the **real path** the ship will
-   sail (the one drawn on the map), not a straight line. This route is kept and
-   reused in the comparison.
-3. **Assess (route-aware)** — `meteor_assess_exposure` is called with each vessel's
-   original route waypoints (`route`). A voyage is flagged when that real path
-   crosses a zone — catching ships heading into a zone before they arrive. Returns
-   affected vessels, each tagged `critical`/`high`/`medium`/`low`, plus a
-   `threatScore`, `estimatedRiskReductionPercent`, a `safeWaypoint` (detour point
-   clear of the zone, placed relative to the route), and `hazardZones` (the avoided
-   zones as map circles). Without a `route` it falls back to a straight
-   current-position → destination leg.
-4. **Approval #1 (alert)** — `meteor_submit_response_decision` renders the
-   `meteor_response_approval` widget. Operator approves / rejects / asks for more.
-5. **Reroute (zone-avoiding)** — on approval, `voyage_generate_route` runs again
-   with the vessel's `safeWaypoint` passed as an itinerary `viaPoint` so the route
-   is **forced to steer clear of the meteor zone** (not merely weather-re-optimised).
-   Original (step 2) vs avoidance route shown in the `route_comparison` widget, with
-   the critical zone drawn as a red overlay.
-6. **Approval #2 (activation)** — a second `meteor_submit_response_decision`.
-7. **Activate** — on approval, `voyage_save_voyage_optimisation_plan` applies it.
-8. **Halt** — any rejection / `more_analysis_requested` / routing failure stops
-   the flow with no changes made.
+---
 
-The flow is encoded as ambient knowledge in `zap/knowledge/meteor.md`; the agent
-runs it from a single prompt such as:
+## Written pitch
 
-> Check for fireball threats to our fleet, alert me, and if I approve, reroute the
-> affected vessels clear of the hazard zone.
+We built a ZAP domain that monitors real NASA/JPL fireball detections, cross-references
+them against live vessel positions using concentric hazard-zone geometry, and — after
+two human approval gates — executes an actual zone-avoiding reroute on a real stage
+vessel using the existing `voyage_*` routing tools. What surprised us most was that the
+voyage engine has no runtime "avoid this polygon" input, so we engineered a
+`safeWaypoint` via-point algorithm from scratch: equirectangular projection, closest-
+approach computation, and radial push to `zoneRadius + 25 km` — all so the route
+physically arcs around the debris field without any backend polygon registration.
 
-**Broadened trigger:** the flow fires on *any* exposure or fleet-safety question,
-not just explicit reroute requests. Vague, status-style prompts — e.g. "are any of
-my voyages heading into a critical meteor zone?", "is the fleet safe from
-fireballs?", "check meteor exposure" — still carry all the way to the first
-approval gate. If
-`meteor_assess_exposure` flags one or more vessels, the agent proactively raises
-the reroute approval rather than just reporting the exposure and stopping.
+---
+
+## Architecture overview
+
+```
+┌───────────────────────────────────────────────────────────┐
+│                   ZAP Platform (zap serve)                 │
+│  ┌──────────────┐  ambient knowledge   ┌───────────────┐  │
+│  │ meteor domain│◄─────────────────────│ zap/knowledge │  │
+│  │              │  OpenAPI + x-zap     │ /meteor.md    │  │
+│  └──────┬───────┘◄── openapi.json     └───────────────┘  │
+│         │ tool calls                                       │
+│  ┌──────▼───────┐  voyage_* (remote)  ┌───────────────┐  │
+│  │    Agent     │◄────────────────────│ voyage domain │  │
+│  └──────┬───────┘                     └───────────────┘  │
+│         │ widget renders                                   │
+│  ┌──────▼──────────────────────────────────────────────┐  │
+│  │ Chat UI (zap-widgets / React + Zod)                 │  │
+│  │ meteor_fireball_map · fireball_list · fireball_detail│  │
+│  │ meteor_response_approval (approval input widget)    │  │
+│  └─────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────┘
+           ▲ HTTP :9001
+┌─────────────────────┐   ┌───────────────────────────┐
+│  Meteor Tool Server │──►│ NASA/JPL Fireball Data API │
+│  (tool-server/)     │   └───────────────────────────┘
+│  + demo fireball    │   ┌───────────────────────────┐
+│    inject           │──►│ SMARTShip API (optional)  │
+└─────────────────────┘   └───────────────────────────┘
+```
+
+---
+
+## Staged reroute flow (7 steps)
+
+1. **Detect** — calls `meteor_get_fireballs` and `meteor_list_vessels` in parallel,
+   then renders `meteor_fireball_map` with vessels coloured by the most-severe zone
+   they fall within. The map also shows concentric hazard rings around each detection.
+2. **Assess** — `meteor_assess_exposure` runs haversine zone intersection across every
+   fireball and vessel pair. Returns each affected vessel with `criticality`, `distanceKm`,
+   `threatScore` (0–100), `estimatedRiskReductionPercent`, and a computed `safeWaypoint`
+   — a detour coordinate placed just outside the hazard zone boundary.
+3. **Approval #1 (alert)** — `meteor_submit_response_decision` renders the
+   `meteor_response_approval` widget. The operator sees the threat summary, a bulleted
+   list of recommended actions, and three decision metrics — threat score, affected
+   asset count, estimated risk reduction — before any routing is computed.
+4. **Reroute** — on approval, `voyage_generate_route` is called with the full `voyage_*`
+   tool chain (weather, bunker prices, safety params, AIS trail) plus the vessel's
+   `safeWaypoint` as `itinerary.viaPoints`. Before/after routes shown in `route_comparison`
+   with hazard zones overlaid — the operator can visually confirm the new route clears them.
+5. **Approval #2 (activation)** — a second `meteor_submit_response_decision` before
+   any voyage data is written. The agent waits for an explicit approval at this gate too.
+6. **Activate** — `voyage_save_voyage_optimisation_plan` applies the reroute to the
+   live voyage plan in the backend.
+7. **Halt** — any rejection, `more_analysis_requested`, or routing failure stops the
+   flow immediately with no side effects. The agent explicitly confirms zero changes.
+
+Trigger prompt: *"Check for fireball threats to our fleet, alert me, and if I approve,
+reroute the affected vessels clear of the hazard zone."*
+
+**Broadened trigger:** ambient knowledge encodes a rule that any fleet-safety question —
+however vague — carries to the first approval gate if any vessel is flagged. Prompts like
+*"is the fleet safe from fireballs?"* or *"check meteor exposure"* trigger the full flow,
+not just a status report.
+
+---
+
+## ZAP platform features used
+
+| Feature | How |
+| --- | --- |
+| **Domain** (`domain.yaml`) | `id: meteor` registered alongside remote `voyage`. |
+| **Tool server** (OpenAPI 3.0) | 4 tools, `x-zap: { enabled: true }`, zero npm dependencies. |
+| **`x-zap-approval-widget`** | `meteor_response_approval` gates every `submit_response_decision` call. |
+| **Ambient knowledge** (`mode: ambient`) | `meteor.md` — 7-step flow, safeWaypoint wiring, broadened trigger rule, injected every turn. |
+| **Task template** | `geofencing.md` (`taskTemplateId: geofencing`); variables: `{{vessel}}`, `{{position}}`, `{{severity}}`. |
+| **Multi-domain** | `meteor` (local) + `voyage` (remote, stage zap-sources) cooperate in one agent turn. |
+| **4 custom widgets** | Map, list, detail, approval — Zod schemas + `defineWidgetView` + Storybook stories + `check:schema-meta`. |
+| **Evals** | `hello.eval.ts` with `@0north/zap-eval-harness`; `MockTools`-based domain evals documented. |
+| **Task API** | `scripts/create-task-and-turn.sh` — `POST /tasks/` then `POST /tasks/{id}/turns`. |
+
+---
 
 ## Repository layout
 
 ```
-meteor_watch/
-├── zap.config.mjs              # CLI config: stage env, local meteor domain, widgets path
+meteor-watch/
+├── zap.config.mjs              # stage env, local meteor domain, ../zap-widgets path
+├── data/fireballs.kml          # auto-generated on start, refreshed every 6 h
 ├── scripts/
-│   ├── create-task-and-turn.sh # create a v2 task + first turn via the API
-│   ├── create-task.json        # default task body (meteor domain, hero vessel)
-│   └── create-turn.json        # default turn message
+│   ├── create-task-and-turn.sh # POST /tasks/ then POST /tasks/{id}/turns
+│   ├── create-task.json        # domainId: meteor, taskTemplateId: geofencing, autoStart: true
+│   └── create-turn.json        # default exposure-check message
 ├── zap/
-│   ├── domain.yaml             # domain id: meteor
-│   ├── knowledge/meteor.md     # ambient knowledge (tools + staged flow)
-│   ├── tasks/
-│   │   └── geofencing.md       # task template (id: geofencing; {{vessel}}, {{position}}, {{severity}})
-│   └── evals/                  # hello.eval.ts (sample)
-└── tool-server/                # zero-dep node:http tool server
-    ├── server.mjs              # /fireballs, /vessels, /exposure, /response/decision
-    ├── exposure.mjs            # pure zone math + safeWaypoint detour calc (unit-tested)
-    ├── exposure.test.mjs       # node:test unit tests
-    ├── openapi.json            # OpenAPI 3.0 spec with x-zap extensions
-    ├── .env.example            # PORT, NASA_FIREBALL_API
-    └── package.json
+│   ├── domain.yaml             # id: meteor
+│   ├── knowledge/meteor.md     # ambient knowledge — tools, 7-step flow, broadened trigger
+│   ├── tasks/geofencing.md     # task template: {{vessel}}, {{position}}, {{severity}}
+│   └── evals/hello.eval.ts     # sample eval (zap-eval-harness + MockTools)
+└── tool-server/                # zero-dependency node:http server
+    ├── server.mjs              # /fireballs /vessels /exposure /response/decision /kml /smartship/*
+    ├── exposure.mjs            # haversine zone math + equirectangular safeWaypoint
+    ├── exposure.test.mjs       # node:test — 5 cases, zero test-runner dependencies
+    ├── kml.mjs                 # NASA columnar → KML circle polygons (100 km radius)
+    ├── smartship.mjs           # Auth0 token cache + geo-custom-zone client
+    ├── openapi.json            # OpenAPI 3.0, x-zap, x-zap-approval-widget
+    └── .env.example            # PORT, NASA_FIREBALL_API, SMARTSHIP_*
 ```
 
-## Tools (meteor domain)
+Widgets: `zap-widgets/src/meteor/` (sibling repo, path resolved by `zap.config.mjs`).
+
+---
+
+## Tools
 
 | Tool | Endpoint | Purpose |
 | --- | --- | --- |
-| `meteor_get_fireballs` | `GET /fireballs` | Proxy NASA/JPL Fireball Data API (located events, newest first). |
-| `meteor_list_vessels` | `GET /vessels` | The watched fleet (id, name, position, destination). |
-| `meteor_assess_exposure` | `POST /exposure` | Which vessels' voyages cross a fireball's hazard zones + threat scoring + a `safeWaypoint` detour and `hazardZones` overlay for each affected voyage. |
-| `meteor_submit_response_decision` | `POST /response/decision` | Operator approval gate (`meteor_response_approval` widget). |
+| `meteor_get_fireballs` | `GET /fireballs` | NASA/JPL proxy. `date_min`, `date_max`, `energy_min`, `limit`. Prepends synthetic 500 kt demo fireball ~25 km from hero vessel. |
+| `meteor_list_vessels` | `GET /vessels` | Fleet — id, name, lat/lon, destination + coordinates. |
+| `meteor_assess_exposure` | `POST /exposure` | Returns `affectedVessels` (with `criticality`, `distanceKm`, `safeWaypoint`), `threatScore`, `affectedAssetCount`, `estimatedRiskReductionPercent`. |
+| `meteor_submit_response_decision` | `POST /response/decision` | Approval gate. Records `approved` / `rejected` / `more_analysis_requested` + ISO timestamp. |
+| `GET /kml` | — | Exports `fireballs.kml` (100 km circle per event). Auto-saved to `data/` every 6 h. |
 
-Routing uses the remote **`voyage`** domain (`voyage_generate_route`,
-`voyage_save_voyage_optimisation_plan`, plus its supporting `voyage_*` tools) and
-the `route_comparison` widget — all loaded from stage zap-sources, not in this
-repo.
+**Reused external services:** `voyage_generate_route` · `voyage_save_voyage_optimisation_plan` (stage zap-sources). SMARTShip `/v1.2/geo-custom-zone` API. NASA/JPL `ssd-api.jpl.nasa.gov/fireball.api`.
 
-### How the reroute avoids the zone
+---
 
-The voyage engine has no inline "avoid this circle" input — `polygonRestrictions`
-only reference pre-registered backend polygons, and none of the `voyage_*` tools
-create one. So avoidance is done with **via points** instead: `meteor_assess_exposure`
-computes a `safeWaypoint` for each affected voyage — a point on the side away from
-the fireball, at the hazard-zone boundary (zone radius + 25 km margin). The
-closest-approach geometry comes from the **real route polyline** passed in (so the
-detour is placed against the path actually sailed, not a straight line). Placement
-depends on where the ship is relative to the zone:
+## Reused services
 
-- **Already inside the zone** → the waypoint is at the zone's *exit* edge, forward
-  along the route, so the ship steers to the safe side and leaves the zone moving
-  toward its destination (no backtracking).
-- **Still approaching** (voyage path crosses the zone ahead) → the waypoint is at
-  the zone's *near* edge, so the route turns off its original line **before** it
-  would enter the zone.
+We wrote zero routing logic, zero geofencing logic, and zero weather modelling. Every
+heavyweight capability in this domain is delegated to an existing production service.
+Our contribution is the glue: domain registration, haversine zone-intersection math,
+the `safeWaypoint` geometry, and the ambient knowledge that orchestrates these services
+into a coherent, approval-gated agent flow.
 
-The flow passes that point as an `itinerary.viaPoints` entry to
-`voyage_generate_route`, so the engine routes origin → safeWaypoint → destination,
-weather-optimised but forced to pass clear of the zone. It's a single-waypoint
-detour (sufficient for the demo), not a multi-segment arc.
+### Weather Routing API (ZeroNorth voyage domain)
 
-## Demo data
+**Tools used:** `voyage_generate_route`, `voyage_save_voyage_optimisation_plan`, and
+the full supporting `voyage_*` tool chain (loaded from stage zap-sources).
 
-For a reliable end-to-end demo the tool server is wired to a single **real** stage
-vessel that has an active voyage leg, so the `voyage_*` routing tools have backend
-data to act on:
+When the operator approves the reroute alert, the agent calls `voyage_generate_route`
+with the affected vessel's current position as origin, its destination port as
+destination, and the computed `safeWaypoint` injected as an `itinerary.viaPoints`
+entry. The routing engine takes it from there — it fetches its own weather windows,
+bunker prices, safety parameters, and AIS trail via its own `voyage_*` sub-tools, and
+returns a fully weather-optimised route that is physically forced to pass through the
+safe waypoint and therefore arc around the debris field.
 
-- **Hero vessel:** `Harvest Time` (IMO 9643881), bound for Rotterdam.
-- **Injected fireball:** `meteor_get_fireballs` prepends a synthetic high-energy
-  fireball ~25 km from the hero vessel — squarely on its voyage to Rotterdam — so
-  `meteor_assess_exposure` reliably flags the voyage `critical`.
+The before/after routes are displayed in the `route_comparison` widget with fireball
+hazard zones overlaid, so the operator can visually verify the new route clears the
+zone before giving the second approval.
 
-The original 8-vessel synthetic fleet is kept commented out in `server.mjs` for
-multi-vessel demos.
+Once the operator approves activation, `voyage_save_voyage_optimisation_plan` writes
+the new route to the live voyage plan in the backend. The meteor domain never touches
+the routing engine internals — it only passes a via-point and trusts the existing
+service to produce the best possible weather-optimised path.
+
+### SMARTShip Geofencing API
+
+**Endpoints used:** `POST /v1.2/geo-custom-zone/upload`, `POST /v1.2/geo-custom-zone`,
+`POST /smartship/push-hazard-zones` (our wrapper).
+
+SMARTShip is ZeroNorth's voyage management platform. It has an existing geofencing
+system that allows operators to define custom navigable zones visible in the voyage UI.
+We call this system directly to register live fireball hazard zones as custom geo-zones,
+so the debris threat becomes visible inside SMARTShip alongside the vessel's route —
+not just inside ZAP.
+
+The flow is: the tool server generates a KML file with one 100 km circle polygon per
+fireball detection, uploads it to SMARTShip's `/geo-custom-zone/upload` endpoint (which
+parses the KML and returns boundaries and metadata), then calls `/geo-custom-zone` to
+create the zone with those boundaries. No new zone storage schema, no new polygon
+format — the entire geofencing capability is already built into SMARTShip. We supply
+the hazard data; SMARTShip handles the rest.
+
+Authentication uses the ZeroNorth `api-login` Auth0 flow. The `smartship.mjs` client
+caches the RS256 bearer token with a 60 s pre-expiry refresh and retries once on 401,
+so token management is fully handled without any manual intervention.
+
+### NASA/JPL Fireball Data API
+
+**Endpoint used:** `GET https://ssd-api.jpl.nasa.gov/fireball.api`
+
+The Center for Near Earth Object Studies (CNEOS) at NASA/JPL publishes a public API
+of atmospheric fireball and bolide detections recorded by US government sensors. Each
+record includes the detection date, geographic coordinates, total radiated energy
+(×10¹⁰ J), impact energy (kt TNT equivalent), entry altitude (km), and entry velocity
+(km/s). The API is proxied as-is — we request located events sorted newest-first and
+pass the response directly to the widgets and exposure engine without transforming or
+caching the data.
+
+The only addition is a synthetic demo fireball (500 kt, ~25 km from the hero vessel)
+prepended to every response so the demo is reliable on every run regardless of where
+real fireballs have been detected recently.
+
+### Zone hazard math
+
+`exposure.mjs` constants are byte-for-byte in sync with `meteor-fireball-map.layers.ts` in `zap-widgets` so server numbers and map colours always agree.
+
+| Severity | Impact energy | Zone fraction | Threat base |
+| --- | --- | --- | --- |
+| `critical` | ≥ 10 kt | 20 % of outer radius | 80 |
+| `high` | ≥ 1 kt | 40 % | 55 |
+| `medium` | ≥ 0.1 kt | 66 % | 30 |
+| `low` | < 0.1 kt | 100 % (= outer) | 10 |
+
+Outer radius: `clamp(120 × ∛(impactE), 30, 500)` km. Threat score: `min(100, BASE[worst] + (affectedCount − 1) × 5)`.
+
+### Zone-avoidance safeWaypoint algorithm
+
+1. Project the vessel's origin→destination line onto an equirectangular frame centred on the fireball.
+2. Find the closest point on that line to the fireball (maximum exposure point).
+3. Push a waypoint radially outward to `zoneRadius + 25 km` on the side away from the hazard.
+4. If the vessel is already inside the zone, push toward the destination rather than back through it.
+5. Convert to decimal degrees (4 d.p.) and pass as `itinerary.viaPoints` to `voyage_generate_route`.
+
+---
+
+## Widgets
+
+| Widget | Description |
+| --- | --- |
+| `meteor_fireball_map` | deck.gl + MapLibre GL global map. Fireballs sized by radiated energy, coloured by impact energy (red/orange/yellow/green). Concentric hazard rings per detection. Vessels inside zones shown as triangles coloured by worst criticality; out-of-range hidden. Hover tooltip: energy, kt, velocity, altitude. Camera auto-fits to all plotted features. |
+| `meteor_fireball_list` | 420 × 480 px scrollable list. Severity filter tabs (All/Critical/High/Medium/Low); rows sorted by impact energy descending. Each row: ocean/hemisphere region, coordinates, date, kt (colour-coded), velocity. |
+| `meteor_fireball_detail` | Single-event readout: kinematics (altitude km, velocity km/s, radiated energy ×10¹⁰ J, impact kt), all four zone radii in km, severity-keyed mariner advisory (NO-GO · AVOID · CAUTION · ADVISORY), vessels ranked by proximity. |
+| `meteor_response_approval` | **Approval input widget.** Situation summary + recommended actions (bulleted) + three metrics (threat score, affected assets, risk reduction %). Buttons: Approve · Reject · Request more analysis. Read-only after submission with colour-coded decision banner (green/grey/amber). Output: `{ decision: "approved" \| "rejected" \| "more_analysis_requested" }`. |
+
+---
 
 ## Prerequisites
 
-- Node.js (the tool server runs on v20+; the ZAP CLI prefers v22/24).
-- `@0north/zap-cli` installed and on PATH (GitHub Packages, needs a PAT with
-  `read:packages`).
-- AWS access to stage SSM (`aws sso login`) — required by `zap serve` to resolve
-  `/stage/*` parameters.
+- **Node.js** v20+ (tool server); v22/24 preferred for the ZAP CLI.
+- **`@0north/zap-cli`** on PATH — GitHub Packages, PAT with `read:packages`.
+- **AWS SSO** access to stage — `aws sso login` required by `zap serve` for SSM parameter resolution.
+- **`zap-widgets`** checked out at `../zap-widgets` (relative to this repo) with `NODE_AUTH_TOKEN` set before `pnpm install`.
 
 ## Running locally
 
-**1. Tool server** (separate process, port 9001):
-
 ```bash
-cd tool-server
-node server.mjs                      # uses defaults
-# or, to load tool-server/.env (copy from .env.example first):
-node --env-file=.env server.mjs
-```
+# 1. Tool server (port 9001)
+cd tool-server && cp .env.example .env
+node --env-file=.env server.mjs    # or: npm start
 
-Env vars (both optional, defaults shown in `.env.example`):
-- `PORT` — listen port (default `9001`; must match `openApiUrl` in `zap.config.mjs`).
-- `NASA_FIREBALL_API` — upstream API base (default JPL fireball API).
+# 2. ZAP platform
+aws sso login
+zap serve --remote-domains         # ⚠️ required — loads voyage_* tools from stage
+# UI → http://localhost:3000/zap
 
-**2. ZAP platform** (from this directory):
-
-```bash
-aws sso login                        # if the stage SSM token has expired
-zap serve --remote-domains           # local meteor + remote voyage/vessel domains
-```
-
-> ⚠️ **`--remote-domains` is required.** This CLI build suppresses remote
-> zap-sources by default; without the flag only the local `meteor` and built-in
-> `vessel` domains load and the routing step has no `voyage_*` tools.
-
-UI: `http://localhost:3000/zap`.
-
-> The platform reads the OpenAPI spec and ambient knowledge **once at startup** —
-> restart `zap serve` after editing `openapi.json` or `zap/knowledge/meteor.md`.
-> Tool-server data changes (fleet, fireball) take effect on the next tool call, no
-> `zap serve` restart needed.
-
-## Creating a task via the API
-
-With `zap serve` running, you can create a v2 task and post the first turn from
-the shell instead of driving the UI manually. The script in `scripts/` calls
-`POST /zap/api/v2/tasks/` then `POST /zap/api/v2/tasks/{id}/turns`.
-
-**Prerequisites**
-
-- `zap serve` (and the tool server) running as above.
-- `ZAP_TOKEN` — an Auth0 bearer JWT for the stage environment (same token the UI
-  uses). Export it before running the script.
-
-**Run with defaults**
-
-The defaults target the demo hero vessel (`Harvest Time`, IMO 9643881) and a
-turn message that kicks off the fireball exposure flow:
-
-```bash
-export ZAP_TOKEN="eyJ..."          # your stage Auth0 JWT
+# 3. Task API (optional, non-UI flow)
+export ZAP_TOKEN="eyJ..."
 ./scripts/create-task-and-turn.sh
 ```
 
-This reads `scripts/create-task.json` and `scripts/create-turn.json`. On
-success it prints the created task id and the formatted turn response.
+Restart `zap serve` after editing `openapi.json` or `meteor.md`. Tool-server data
+changes (fleet list, fireball values) take effect on the next tool call without restart.
 
-**Custom bodies**
-
-Pass JSON file paths as arguments to override the defaults:
-
-```bash
-./scripts/create-task-and-turn.sh ./scripts/create-task.json ./scripts/create-turn.json
-```
-
-Optional environment variables:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `ZAP_BASE_URL` | `http://localhost:3000` | ZAP API base URL |
-| `ZAP_TOKEN` | (required) | Auth0 bearer JWT |
-
-**Default task body** (`create-task.json`):
-
-```json
-{
-  "domainId": "meteor",
-  "taskTemplateId": "geofencing",
-  "autoStart": true,
-  "data": {
-    "vessel": { "id": "9643881", "name": "Harvest Time" },
-    "position": "21.88, -111.54",
-    "severity": "critical"
-  },
-  "priority": "medium"
-}
-```
-
-`autoStart: true` starts the agent immediately after the task is created. Edit
-`data` to match another vessel or scenario; keep `domainId` as `meteor`.
-
-**Default turn message** (`create-turn.json`):
-
-```json
-{
-  "message": "Check for recent fireball detections and assess vessel exposure."
-}
-```
-
-For the full staged reroute flow (alert → reroute → activate), use a message
-like the prompt in [What it does](#what-it-does-staged-reroute-flow) above.
-
-**Help**
-
-```bash
-./scripts/create-task-and-turn.sh --help
-```
+---
 
 ## Testing
 
-Unit tests for the exposure zone math:
-
 ```bash
-cd tool-server
-node --test exposure.test.mjs
+cd tool-server && node --test exposure.test.mjs    # 5 unit tests, zero extra deps
+zap lint http://localhost:9001/openapi.json         # OpenAPI + x-zap spec lint
+# In zap-widgets: pnpm typecheck && pnpm lint && pnpm build && pnpm check:schema-meta
 ```
 
-Spec lint:
-
-```bash
-zap lint http://localhost:9001/openapi.json
-```
-
-End-to-end is verified manually in the live UI (drive the prompt above; check the
-widget render order and the reject path).
+Tests cover: severity bucket thresholds · `outerRangeKm` cube-root scaling and clamps ·
+vessel-in-zone labelling with correct `criticality` and `threatScore` · `safeWaypoint`
+geometry (distance from fireball must exceed zone radius) · no waypoint when vessel has
+no destination · `affectedAssetCount: 0` when vessel is out of range.
