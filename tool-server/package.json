@@ -5,6 +5,6 @@
   "type": "module",
   "description": "ZAP tool server for the Meteor Debris Watch domain.",
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node --env-file-if-exists=.env server.mjs"
   }
 }
