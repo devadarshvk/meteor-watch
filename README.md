@@ -33,6 +33,13 @@ runs it from a single prompt such as:
 > Check for fireball threats to our fleet, alert me, and if I approve, reroute the
 > affected vessels clear of the hazard zone.
 
+**Broadened trigger:** the flow fires on *any* exposure or fleet-safety question,
+not just explicit reroute requests. Vague, status-style prompts — e.g. "are any of
+my vessels in a critical meteor zone?", "is the fleet safe from fireballs?",
+"check meteor exposure" — still carry all the way to the first approval gate. If
+`meteor_assess_exposure` flags one or more vessels, the agent proactively raises
+the reroute approval rather than just reporting the exposure and stopping.
+
 ## Repository layout
 
 ```
