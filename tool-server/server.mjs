@@ -70,7 +70,7 @@ async function getFireballs(query) {
   if (query.get("date_min")) base.searchParams.set("date-min", query.get("date_min"));
   if (query.get("date_max")) base.searchParams.set("date-max", query.get("date_max"));
   if (query.get("energy_min")) base.searchParams.set("energy-min", query.get("energy_min"));
-  base.searchParams.set("limit", query.get("limit") || "50");
+  base.searchParams.set("limit", query.get("limit") || base.searchParams.get("limit") || "50");
 
   const url = base.toString();
   const resp = await fetch(url);
