@@ -289,3 +289,6 @@ Tests cover: severity bucket thresholds · `outerRangeKm` cube-root scaling and 
 vessel-in-zone labelling with correct `criticality` and `threatScore` · `safeWaypoint`
 geometry (distance from fireball must exceed zone radius) · no waypoint when vessel has
 no destination · `affectedAssetCount: 0` when vessel is out of range.
+
+## Link to project video
+https://drive.google.com/drive/folders/1UtEtyz7YHaRj-5WQQJ0c15v_SiTKzQqv?usp=drive_link
