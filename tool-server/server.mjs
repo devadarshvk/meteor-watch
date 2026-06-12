@@ -27,7 +27,7 @@ const FLEET = [
     name: "Harvest Time",
     latitude: 21.88,
     longitude: -111.54,
-    destination: { name: "Rotterdam", latitude: 51.99, longitude: 4.05 },
+    destination: { name: "Tumaco", latitude: 1.83, longitude: -78.74 },
   },
 ];
 
@@ -43,17 +43,18 @@ const FLEET = [
 //   { id: "IMO-9678901", name: "Coral Sentinel", latitude: -38.0, longitude: -64.7, destination: { name: "Buenos Aires", latitude: -34.6, longitude: -58.37 } },
 // ];
 
-// Synthetic fireball ~25 km north of Harvest Time (21.88, -111.54), high impact
-// energy so the vessel lands inside the critical hazard zone. Injected into the
+// Synthetic high-impact fireball positioned on Harvest Time's voyage, off the
+// Pacific coast of southern Mexico (14°57'31"N, 99°57'10"W). High impact energy so
+// the voyage crosses the critical hazard zone. Injected into the
 // meteor_get_fireballs response by field name so it aligns with NASA's column
 // order regardless of how the live API orders `fields`.
 const DEMO_FIREBALL = {
   date: "2026-06-11 12:00:00",
   energy: "500",
   "impact-e": "50",
-  lat: "22.10",
+  lat: "14.9586",
   "lat-dir": "N",
-  lon: "111.54",
+  lon: "99.9528",
   "lon-dir": "W",
   alt: "30",
   vel: "18",

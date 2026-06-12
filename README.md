@@ -2,8 +2,8 @@
 
 A ZAP (ZeroNorth Agentic Platform) demo domain. The agent monitors atmospheric
 fireball / bolide detections from the NASA/JPL Fireball Data API, computes which
-vessels fall inside an event's debris hazard zones, alerts the operator for
-approval, and — on approval — reroutes the threatened vessel via the real
+vessels' planned voyages cross an event's debris hazard zones, alerts the operator
+for approval, and — on approval — reroutes the threatened voyage via the real
 `voyage` routing tools, gated by a second approval before activation.
 
 ## What it does (staged reroute flow)
@@ -12,9 +12,12 @@ approval, and — on approval — reroutes the threatened vessel via the real
    `meteor_fireball_map` widget (vessels coloured by the severity of the zone
    they fall in).
 2. **Assess** — `meteor_assess_exposure` runs the same zone math as the map
-   widget and returns affected vessels, each tagged `critical`/`high`/`medium`/
-   `low`, plus a `threatScore`, `estimatedRiskReductionPercent`, and a
-   `safeWaypoint` — a detour point placed just outside the hazard zone.
+   widget against each vessel's **planned voyage** (current position →
+   destination): a voyage is flagged when its route crosses a zone — catching
+   ships heading into a zone before they arrive, not only those already inside.
+   Returns affected vessels, each tagged `critical`/`high`/`medium`/`low`, plus a
+   `threatScore`, `estimatedRiskReductionPercent`, a `safeWaypoint` (detour point
+   clear of the zone), and `hazardZones` (the avoided zones as map circles).
 3. **Approval #1 (alert)** — `meteor_submit_response_decision` renders the
    `meteor_response_approval` widget. Operator approves / rejects / asks for more.
 4. **Reroute (zone-avoiding)** — on approval, `voyage_generate_route` computes a
@@ -35,8 +38,9 @@ runs it from a single prompt such as:
 
 **Broadened trigger:** the flow fires on *any* exposure or fleet-safety question,
 not just explicit reroute requests. Vague, status-style prompts — e.g. "are any of
-my vessels in a critical meteor zone?", "is the fleet safe from fireballs?",
-"check meteor exposure" — still carry all the way to the first approval gate. If
+my voyages heading into a critical meteor zone?", "is the fleet safe from
+fireballs?", "check meteor exposure" — still carry all the way to the first
+approval gate. If
 `meteor_assess_exposure` flags one or more vessels, the agent proactively raises
 the reroute approval rather than just reporting the exposure and stopping.
 
@@ -70,7 +74,7 @@ meteor_watch/
 | --- | --- | --- |
 | `meteor_get_fireballs` | `GET /fireballs` | Proxy NASA/JPL Fireball Data API (located events, newest first). |
 | `meteor_list_vessels` | `GET /vessels` | The watched fleet (id, name, position, destination). |
-| `meteor_assess_exposure` | `POST /exposure` | Which vessels fall in a fireball's hazard zones + threat scoring + a `safeWaypoint` detour for each affected vessel. |
+| `meteor_assess_exposure` | `POST /exposure` | Which vessels' voyages cross a fireball's hazard zones + threat scoring + a `safeWaypoint` detour and `hazardZones` overlay for each affected voyage. |
 | `meteor_submit_response_decision` | `POST /response/decision` | Operator approval gate (`meteor_response_approval` widget). |
 
 Routing uses the remote **`voyage`** domain (`voyage_generate_route`,
@@ -83,13 +87,21 @@ repo.
 The voyage engine has no inline "avoid this circle" input — `polygonRestrictions`
 only reference pre-registered backend polygons, and none of the `voyage_*` tools
 create one. So avoidance is done with **via points** instead: `meteor_assess_exposure`
-computes a `safeWaypoint` for each affected vessel — a point just outside the
-hazard-zone boundary (zone radius + 25 km margin), offset on the side away from
-the fireball, along the vessel's heading toward its destination. The flow passes
-that point as an `itinerary.viaPoints` entry to `voyage_generate_route`, so the
-engine routes origin → safeWaypoint → destination, weather-optimised but forced to
-pass clear of the zone. It's a single-waypoint detour (sufficient for the demo),
-not a multi-segment arc.
+computes a `safeWaypoint` for each affected voyage — a point on the side away from
+the fireball, at the hazard-zone boundary (zone radius + 25 km margin). Placement
+depends on where the ship is relative to the zone:
+
+- **Already inside the zone** → the waypoint is at the zone's *exit* edge, forward
+  along the route, so the ship steers to the safe side and leaves the zone moving
+  toward its destination (no backtracking).
+- **Still approaching** (voyage path crosses the zone ahead) → the waypoint is at
+  the zone's *near* edge, so the route turns off its original line **before** it
+  would enter the zone.
+
+The flow passes that point as an `itinerary.viaPoints` entry to
+`voyage_generate_route`, so the engine routes origin → safeWaypoint → destination,
+weather-optimised but forced to pass clear of the zone. It's a single-waypoint
+detour (sufficient for the demo), not a multi-segment arc.
 
 ## Demo data
 
@@ -99,8 +111,8 @@ data to act on:
 
 - **Hero vessel:** `Harvest Time` (IMO 9643881), bound for Rotterdam.
 - **Injected fireball:** `meteor_get_fireballs` prepends a synthetic high-energy
-  fireball ~25 km from the hero vessel, so `meteor_assess_exposure` reliably flags
-  it `critical`.
+  fireball ~25 km from the hero vessel — squarely on its voyage to Rotterdam — so
+  `meteor_assess_exposure` reliably flags the voyage `critical`.
 
 The original 8-vessel synthetic fleet is kept commented out in `server.mjs` for
 multi-vessel demos.

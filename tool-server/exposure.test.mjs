@@ -24,9 +24,12 @@ test("outerRangeKm clamps and scales by cube root", () => {
   assert.equal(outerRangeKm(1e9), 500);     // clamped to max
 });
 
-test("vessel inside the high zone is affected and labelled high", () => {
-  // ~0.3° north of (0,0) ≈ 33 km < 60.5 km high-zone radius.
-  const vessels = [{ id: "V1", name: "Near", latitude: 0.3, longitude: 0.0 }];
+test("voyage whose closest approach is in the high zone is labelled high", () => {
+  // Vessel at 0.3°N of (0,0) ≈ 33 km, heading east; the leg's closest approach to
+  // the fireball is its start (33 km) < 60.5 km high-zone radius.
+  const vessels = [
+    { id: "V1", name: "Near", latitude: 0.3, longitude: 0.0, destination: { name: "East", latitude: 0.3, longitude: 40.0 } },
+  ];
   const out = assessExposure(FB, vessels);
   assert.equal(out.affectedAssetCount, 1);
   assert.equal(out.affectedVessels[0].criticality, "high");
@@ -63,12 +66,51 @@ test("affected vessel with a destination gets a safeWaypoint outside the zone", 
   const distKm = 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
   const highZoneKm = 0.4 * Math.min(500, Math.max(30, 120 * Math.cbrt(2)));
   assert.ok(distKm >= highZoneKm, `waypoint ${distKm.toFixed(1)}km must clear zone ${highZoneKm.toFixed(1)}km`);
+
+  // Waypoint must be FORWARD toward the destination (east here), never behind the
+  // vessel — the ship is already inside the zone and must exit moving toward port.
+  assert.ok(wp.longitude > 0, `waypoint must be east (toward dest), got lon ${wp.longitude}`);
 });
 
-test("affected vessel without a destination has no safeWaypoint", () => {
+test("vessel without a destination is not assessed (no voyage to reroute)", () => {
   const vessels = [{ id: "V3", name: "NoDest", latitude: 0.3, longitude: 0.0 }];
   const out = assessExposure(FB, vessels);
-  assert.equal(out.affectedVessels[0].safeWaypoint, undefined);
+  assert.equal(out.affectedAssetCount, 0);
+});
+
+test("exposure emits a hazardZones nogo-circle for the affected event", () => {
+  const vessels = [
+    { id: "V1", name: "Near", latitude: 0.3, longitude: 0.0, destination: { name: "East", latitude: 0.3, longitude: 40.0 } },
+  ];
+  const out = assessExposure(FB, vessels);
+  assert.equal(out.hazardZones.length, 1);
+  const zone = out.hazardZones[0];
+  assert.equal(zone.type, "nogo");
+  assert.equal(zone.geojson.type, "Feature");
+  assert.equal(zone.geojson.geometry.type, "Polygon");
+
+  // Ring is closed (first == last) and is a [lon,lat] circle centred on (0,0).
+  const ring = zone.geojson.geometry.coordinates[0];
+  assert.ok(ring.length >= 5, "circle ring should have several points");
+  assert.deepEqual(ring[0], ring[ring.length - 1], "ring must be closed");
+
+  // Every ring vertex sits ~ the high-zone radius (0.4*outer) from the fireball.
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const highZoneKm = 0.4 * Math.min(500, Math.max(30, 120 * Math.cbrt(2)));
+  for (const [lon, lat] of ring) {
+    const a =
+      Math.sin(toRad(lat) / 2) ** 2 +
+      Math.cos(0) * Math.cos(toRad(lat)) * Math.sin(toRad(lon) / 2) ** 2;
+    const distKm = 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+    assert.ok(Math.abs(distKm - highZoneKm) < 1, `vertex ${distKm.toFixed(1)}km ~ ${highZoneKm.toFixed(1)}km`);
+  }
+});
+
+test("no affected vessels → empty hazardZones", () => {
+  const vessels = [{ id: "V2", name: "Far", latitude: 10, longitude: 10 }];
+  const out = assessExposure(FB, vessels);
+  assert.deepEqual(out.hazardZones, []);
 });
 
 test("vessel outside all zones is not affected", () => {
@@ -76,4 +118,23 @@ test("vessel outside all zones is not affected", () => {
   const out = assessExposure(FB, vessels);
   assert.equal(out.affectedAssetCount, 0);
   assert.equal(out.affectedVessels.length, 0);
+});
+
+test("voyage whose PATH crosses a zone is flagged even when the vessel is outside it", () => {
+  // FB at (0,0). Vessel 0.3° east-ish but here far west at lon -2 (~222 km, outside
+  // the high zone ~60.5 km) heading to lon 40 — its straight path runs through (0,0).
+  const vessels = [
+    { id: "P1", name: "Crosser", latitude: 0.0, longitude: -2.0, destination: { name: "East", latitude: 0.0, longitude: 40.0 } },
+  ];
+  const out = assessExposure(FB, vessels);
+  assert.equal(out.affectedAssetCount, 1, "path crossing the zone must be flagged");
+  // Vessel is outside, so the detour turns BEFORE entering → waypoint west of the fireball.
+  assert.ok(out.affectedVessels[0].safeWaypoint.longitude < 0, "approaching vessel turns before the zone (west of fireball)");
+});
+
+test("voyage that neither sits in nor crosses any zone is not affected", () => {
+  const vessels = [
+    { id: "P2", name: "Clear", latitude: 10, longitude: 10, destination: { name: "NE", latitude: 20, longitude: 20 } },
+  ];
+  assert.equal(assessExposure(FB, vessels).affectedAssetCount, 0);
 });
