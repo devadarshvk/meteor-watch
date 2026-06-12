@@ -9,25 +9,29 @@ for approval, and — on approval — reroutes the threatened voyage via the rea
 ## What it does (staged reroute flow)
 
 1. **Detect** — `meteor_get_fireballs` + `meteor_list_vessels`, rendered on the
-   `meteor_fireball_map` widget (vessels coloured by the severity of the zone
-   they fall in).
-2. **Assess** — `meteor_assess_exposure` runs the same zone math as the map
-   widget against each vessel's **planned voyage** (current position →
-   destination): a voyage is flagged when its route crosses a zone — catching
-   ships heading into a zone before they arrive, not only those already inside.
-   Returns affected vessels, each tagged `critical`/`high`/`medium`/`low`, plus a
+   `meteor_fireball_map` widget.
+2. **Route** — `voyage_generate_route` computes each vessel's current (original)
+   route first, so exposure can be tested against the **real path** the ship will
+   sail (the one drawn on the map), not a straight line. This route is kept and
+   reused in the comparison.
+3. **Assess (route-aware)** — `meteor_assess_exposure` is called with each vessel's
+   original route waypoints (`route`). A voyage is flagged when that real path
+   crosses a zone — catching ships heading into a zone before they arrive. Returns
+   affected vessels, each tagged `critical`/`high`/`medium`/`low`, plus a
    `threatScore`, `estimatedRiskReductionPercent`, a `safeWaypoint` (detour point
-   clear of the zone), and `hazardZones` (the avoided zones as map circles).
-3. **Approval #1 (alert)** — `meteor_submit_response_decision` renders the
+   clear of the zone, placed relative to the route), and `hazardZones` (the avoided
+   zones as map circles). Without a `route` it falls back to a straight
+   current-position → destination leg.
+4. **Approval #1 (alert)** — `meteor_submit_response_decision` renders the
    `meteor_response_approval` widget. Operator approves / rejects / asks for more.
-4. **Reroute (zone-avoiding)** — on approval, `voyage_generate_route` computes a
-   new route for the affected vessel, with the vessel's `safeWaypoint` passed as
-   an itinerary `viaPoint` so the route is **forced to steer clear of the meteor
-   zone** (not merely weather-re-optimised between the same endpoints). Old vs new
-   shown in the `route_comparison` widget.
-5. **Approval #2 (activation)** — a second `meteor_submit_response_decision`.
-6. **Activate** — on approval, `voyage_save_voyage_optimisation_plan` applies it.
-7. **Halt** — any rejection / `more_analysis_requested` / routing failure stops
+5. **Reroute (zone-avoiding)** — on approval, `voyage_generate_route` runs again
+   with the vessel's `safeWaypoint` passed as an itinerary `viaPoint` so the route
+   is **forced to steer clear of the meteor zone** (not merely weather-re-optimised).
+   Original (step 2) vs avoidance route shown in the `route_comparison` widget, with
+   the critical zone drawn as a red overlay.
+6. **Approval #2 (activation)** — a second `meteor_submit_response_decision`.
+7. **Activate** — on approval, `voyage_save_voyage_optimisation_plan` applies it.
+8. **Halt** — any rejection / `more_analysis_requested` / routing failure stops
    the flow with no changes made.
 
 The flow is encoded as ambient knowledge in `zap/knowledge/meteor.md`; the agent
@@ -88,7 +92,9 @@ The voyage engine has no inline "avoid this circle" input — `polygonRestrictio
 only reference pre-registered backend polygons, and none of the `voyage_*` tools
 create one. So avoidance is done with **via points** instead: `meteor_assess_exposure`
 computes a `safeWaypoint` for each affected voyage — a point on the side away from
-the fireball, at the hazard-zone boundary (zone radius + 25 km margin). Placement
+the fireball, at the hazard-zone boundary (zone radius + 25 km margin). The
+closest-approach geometry comes from the **real route polyline** passed in (so the
+detour is placed against the path actually sailed, not a straight line). Placement
 depends on where the ship is relative to the zone:
 
 - **Already inside the zone** → the waypoint is at the zone's *exit* edge, forward

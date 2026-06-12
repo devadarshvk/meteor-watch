@@ -2,8 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { assessExposure, outerRangeKm, severityOf } from "./exposure.mjs";
 
-// A single high-energy fireball at (0,0). impact-e = 2 kt → "high" severity.
-// outer zone = clamp(120*cbrt(2),30,500) ≈ 151.2 km; high zone = 0.4*outer ≈ 60.5 km.
 const FB = {
   signature: { version: "1.2", source: "NASA/JPL Fireball Data API" },
   count: "1",
@@ -25,8 +23,7 @@ test("outerRangeKm clamps and scales by cube root", () => {
 });
 
 test("voyage whose closest approach is in the high zone is labelled high", () => {
-  // Vessel at 0.3°N of (0,0) ≈ 33 km, heading east; the leg's closest approach to
-  // the fireball is its start (33 km) < 60.5 km high-zone radius.
+
   const vessels = [
     { id: "V1", name: "Near", latitude: 0.3, longitude: 0.0, destination: { name: "East", latitude: 0.3, longitude: 40.0 } },
   ];
@@ -39,8 +36,7 @@ test("voyage whose closest approach is in the high zone is labelled high", () =>
 });
 
 test("affected vessel with a destination gets a safeWaypoint outside the zone", () => {
-  // Vessel 0.3°N of (0,0), destination far east. impact-e=2 → outer≈151.2 km,
-  // high-zone radius (0.4*outer)≈60.5 km. Waypoint must clear that radius.
+
   const vessels = [
     {
       id: "V1",
@@ -54,8 +50,6 @@ test("affected vessel with a destination gets a safeWaypoint outside the zone", 
   const wp = out.affectedVessels[0].safeWaypoint;
   assert.ok(wp, "expected a safeWaypoint");
 
-  // Distance from the fireball (0,0) to the waypoint must exceed the high-zone
-  // radius (~60.5 km). outer = clamp(120*cbrt(2)) ≈ 151.2; high = 0.4*outer.
   const R = 6371;
   const toRad = (d) => (d * Math.PI) / 180;
   const dLat = toRad(wp.latitude - 0);
@@ -67,8 +61,6 @@ test("affected vessel with a destination gets a safeWaypoint outside the zone", 
   const highZoneKm = 0.4 * Math.min(500, Math.max(30, 120 * Math.cbrt(2)));
   assert.ok(distKm >= highZoneKm, `waypoint ${distKm.toFixed(1)}km must clear zone ${highZoneKm.toFixed(1)}km`);
 
-  // Waypoint must be FORWARD toward the destination (east here), never behind the
-  // vessel — the ship is already inside the zone and must exit moving toward port.
   assert.ok(wp.longitude > 0, `waypoint must be east (toward dest), got lon ${wp.longitude}`);
 });
 
@@ -137,4 +129,63 @@ test("voyage that neither sits in nor crosses any zone is not affected", () => {
     { id: "P2", name: "Clear", latitude: 10, longitude: 10, destination: { name: "NE", latitude: 20, longitude: 20 } },
   ];
   assert.equal(assessExposure(FB, vessels).affectedAssetCount, 0);
+});
+
+test("route-aware: the real route polyline is assessed, not the straight leg", () => {
+  const farNorthRoute = [
+    { latitude: 5.0, longitude: -5.0 },
+    { latitude: 5.0, longitude: 5.0 },
+  ];
+  const vessels = [
+    { id: "R1", name: "Detour", latitude: 0.3, longitude: -5.0, destination: { name: "E", latitude: 0.3, longitude: 5.0 }, route: farNorthRoute },
+  ];
+  assert.equal(assessExposure(FB, vessels).affectedAssetCount, 0, "route polyline (lat 5) clears the zone");
+
+  const throughRoute = [
+    { latitude: 0.3, longitude: -5.0 },
+    { latitude: 0.0, longitude: 0.0 },
+    { latitude: 0.3, longitude: 5.0 },
+  ];
+  const out = assessExposure(FB, [
+    { id: "R2", name: "Through", latitude: 0.3, longitude: -5.0, destination: { name: "E", latitude: 0.3, longitude: 5.0 }, route: throughRoute },
+  ]);
+  assert.equal(out.affectedAssetCount, 1);
+  assert.equal(out.affectedVessels[0].criticality, "critical");
+});
+
+test("route-aware: the avoidance leg origin→waypoint→destination clears the zone", () => {
+
+  const O = { lat: 0.0, lon: -5.0 };
+  const D = { lat: 0.0, lon: 5.0 };
+  const route = [O, { latitude: 0.0, longitude: 0.0 }, D].map((p) =>
+    p.latitude !== undefined ? p : { latitude: p.lat, longitude: p.lon },
+  );
+  const out = assessExposure(FB, [
+    { id: "A1", name: "Avoider", latitude: O.lat, longitude: O.lon, destination: { name: "E", latitude: D.lat, longitude: D.lon }, route },
+  ]);
+  assert.equal(out.affectedAssetCount, 1);
+  const wp = out.affectedVessels[0].safeWaypoint;
+
+  // impact-e=2 → critical-zone radius = 0.2*outer. Both reroute legs must clear it.
+  const criticalZoneKm = 0.2 * Math.min(500, Math.max(30, 120 * Math.cbrt(2)));
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const hav = (a, b) => {
+    const dLat = toRad(b.lat - a.lat);
+    const dLon = toRad(b.lon - a.lon);
+    const x =
+      Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
+  };
+  const segMin = (A, B) => {
+    let m = Infinity;
+    for (let i = 0; i <= 300; i++) {
+      const f = i / 300;
+      m = Math.min(m, hav({ lat: 0, lon: 0 }, { lat: A.lat + f * (B.lat - A.lat), lon: A.lon + f * (B.lon - A.lon) }));
+    }
+    return m;
+  };
+  const W = { lat: wp.latitude, lon: wp.longitude };
+  assert.ok(segMin(O, W) >= criticalZoneKm, `leg O→W ${segMin(O, W).toFixed(1)}km must clear ${criticalZoneKm.toFixed(1)}km`);
+  assert.ok(segMin(W, D) >= criticalZoneKm, `leg W→D ${segMin(W, D).toFixed(1)}km must clear ${criticalZoneKm.toFixed(1)}km`);
 });
