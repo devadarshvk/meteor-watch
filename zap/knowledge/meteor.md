@@ -72,17 +72,23 @@ Run these steps in order:
    "Reroute <vessel> clear of the hazard zone") for the affected vessels,
    `threatScore`, `affectedAssetCount`, and `estimatedRiskReductionPercent` from
    the exposure result. Wait for the operator's decision.
-4. Only if the decision is `approved`: for each affected vessel, generate a new
-   route with the voyage routing tools — `voyage_generate_route` with the
-   vessel's current position as origin and its `destination` as destination,
-   fetching whatever inputs that tool needs via the other `voyage_*` tools
-   (weather, bunker prices, market rates, safety parameters, AIS trail, etc.) per
-   the voyage domain's own guidance. **Crucially, pass the affected vessel's
-   `safeWaypoint` (from the exposure result) as an entry in the itinerary's
-   `viaPoints` so the route is forced to steer clear of the hazard zone** — this
-   is what makes the reroute actually avoid the meteor range rather than just
-   re-optimise for weather. Render **route_comparison** showing the existing route
-   versus the new (avoidance) route.
+4. Only if the decision is `approved`: for each affected vessel, generate **two**
+   routes with the voyage routing tools so the operator always sees a like-for-like
+   comparison. Both use `voyage_generate_route` with the vessel's current position
+   as origin and its `destination` as destination, and the same supporting inputs
+   fetched via the other `voyage_*` tools (weather, bunker prices, market rates,
+   safety parameters, AIS trail, etc.) per the voyage domain's own guidance. The
+   only difference between the two calls is the via point:
+   - **Original route** — call `voyage_generate_route` with **no** meteor via point
+     (the route the vessel would otherwise sail).
+   - **Avoidance route** — call `voyage_generate_route` again, this time passing the
+     affected vessel's `safeWaypoint` (from the exposure result) as an entry in the
+     itinerary's `viaPoints`, **so the route is forced to steer clear of the hazard
+     zone**. This is what makes the reroute actually avoid the meteor range rather
+     than just re-optimise for weather.
+
+   Always produce both and render **route_comparison** with the original route
+   versus the new (avoidance) route — never show only one side.
 5. **Second approval (activation).** Call `meteor_submit_response_decision` again
    (it renders the `meteor_response_approval` widget) to confirm activating the
    reroute. Wait for the decision.
